@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: amqp-adaptation-request
+spec:
+  amqp:
+    example:
+      # amqp server url
+      url: amqp://rabbitmq-service.argo-events:5672
+      # jsonBody specifies that all event body payload coming from this
+      # source will be JSON
+      jsonBody: true
+      # name of the exchange.
+      exchangeName: adaptation-exchange
+      # exchange type. more info at https://www.rabbitmq.com/tutorials/amqp-concepts.html#exchanges
+      exchangeType: direct
+      # routing key
+      routingKey: adaptation-request
+      # optional backoff time for connection retries.
+      # if not provided, default connection backoff time will be used.
+      connectionBackoff:
+        # duration in nanoseconds. following value is 10 seconds
+        duration: 10000000000
+        # how many backoffs
+        steps: 5
+        # factor to increase on each step.
+        # setting factor > 1 makes backoff exponential.
+        factor: 2
+        jitter: 0.2
