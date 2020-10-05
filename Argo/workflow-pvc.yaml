@@ -1,0 +1,188 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: amqp
+spec:
+  template:
+    serviceAccountName: argo-events-sa
+  dependencies:
+    - name: amqp-dep
+      eventSourceName: amqp-adaptation-request
+      eventName: example
+  triggers:
+    - template:
+        name: amqp-workflow-trigger
+        k8s:
+          group: argoproj.io
+          version: v1alpha1
+          resource: workflows
+          operation: create
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: glasswall-rebuild-
+              spec:
+                entrypoint: file-processing
+                imagePullSecrets:
+                - name: regcred
+                podGC:
+                  strategy: OnPodSuccess
+                volumes:
+                - name: sourcedir
+                  persistentVolumeClaim:
+                    claimName: glasswallsource-pvc
+                - name: targetdir
+                  persistentVolumeClaim:
+                    claimName: glasswalltarget-pvc
+                arguments:
+                  parameters:
+                    - name: message
+                      # value will get overridden by the event payload
+                      value: hello
+                templates:
+                - name: file-processing
+                  inputs:
+                    parameters:
+                      - name: message
+                  steps:
+                  - - name: readmessage
+                      template: readmessage-template
+                      arguments:
+                        parameters:
+                        - name: message
+                          value: "{{inputs.parameters.message}}"
+                  - - name: movefile
+                      template: movefile-template
+                      arguments:
+                        parameters:
+                        - name: sourceFileName
+                          value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
+                  - - name: hashfile
+                      template: hashfile-template
+                      arguments:
+                        parameters:
+                        - name: sourceFileName
+                          value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
+                        artifacts:
+                        - name: sourceFile
+                          from: "{{steps.movefile.outputs.artifacts.sourceFile}}"
+                  - - name: rebuild
+                      template: rebuild-template
+                      arguments:
+                        parameters:
+                        - name: sourceFileName
+                          value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
+                        - name: hash
+                          value: "{{steps.hashfile.outputs.parameters.hash}}"
+                        artifacts:
+                        - name: sourceFile
+                          from: "{{steps.movefile.outputs.artifacts.sourceFile}}"
+                  - - name: consumestatus
+                      template: consumestatus-template
+                      arguments:
+                        parameters:
+                        - name: status
+                          value: "{{steps.rebuild.outputs.parameters.status}}"
+                        - name: hash
+                          value: "{{steps.hashfile.outputs.parameters.hash}}"
+                        - name: sourceFileName
+                          value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
+
+                - name: readmessage-template
+                  inputs:
+                    parameters:
+                    - name: message
+                  container:
+                    image: diggers/message-reader
+                    env:
+                    - name: MESSAGE
+                      value: "{{inputs.parameters.message}}"
+                  outputs:
+                    parameters:
+                    - name: sourceFileName
+                      valueFrom:
+                        path: /tmp/sourceFileName.txt
+
+                - name: movefile-template
+                  inputs:
+                    parameters:
+                    - name: sourceFileName
+                  script:
+                    image: python:alpine3.6
+                    command: [python]
+                    source: |
+                      s = "{{inputs.parameters.sourceFileName}}"
+                      result = "ok-to-rebuild" if s.endswith('.jpg') else "nok-to-rebuild" # This output can be used as condition for the next step
+                      print(result)
+                    volumeMounts:
+                    - name: sourcedir
+                      mountPath: /glasswallsource
+                  outputs:
+                    artifacts:
+                    - name: sourceFile
+                      path: /glasswallsource/{{inputs.parameters.sourceFileName}}
+                    
+                - name: hashfile-template
+                  inputs:
+                    parameters:
+                    - name: sourceFileName
+                    artifacts:
+                    - name: sourceFile
+                      path: /input/{{inputs.parameters.sourceFileName}}
+                  container:
+                    image: diggers/file-hasher
+                    env:
+                    - name: FILEPATH
+                      value: "/input/{{inputs.parameters.sourceFileName}}"
+                  outputs:
+                    parameters:
+                    - name: hash
+                      valueFrom:
+                        path: /tmp/hash.txt
+
+                - name: rebuild-template
+                  inputs:
+                    parameters:
+                    - name: sourceFileName
+                    - name: hash
+                    artifacts:
+                    - name: sourceFile
+                      path: /input/{{inputs.parameters.sourceFileName}}
+                  container:
+                    image: diggers/icap-rebuild
+                    env:
+                    - name: INPUT_PATH
+                      value: "/input/{{inputs.parameters.sourceFileName}}"
+                    - name: OUTPUT_PATH
+                      value: "/output/{{inputs.parameters.hash}}"
+                    volumeMounts:
+                    - name: targetdir
+                      mountPath: /output
+                  outputs:
+                    parameters:
+                    - name: status
+                      valueFrom:
+                        path: /tmp/status.txt
+
+                - name: consumestatus-template
+                  inputs:
+                    parameters:
+                    - name: status
+                    - name: hash
+                    - name: sourceFileName
+                  container:
+                    image: diggers/status-consumer
+                    env:
+                    - name: STATUS
+                      value: "{{inputs.parameters.status}}"
+                    - name: FILEHASH
+                      value: "{{inputs.parameters.hash}}"
+                    - name: FILENAME
+                      value: "{{inputs.parameters.sourceFileName}}"
+  
+          parameters:
+            - src:
+                dependencyName: amqp-dep
+              dest: spec.arguments.parameters.0.value
