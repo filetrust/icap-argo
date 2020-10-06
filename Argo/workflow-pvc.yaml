@@ -53,21 +53,12 @@ spec:
                         parameters:
                         - name: message
                           value: "{{inputs.parameters.message}}"
-                  - - name: movefile
-                      template: movefile-template
-                      arguments:
-                        parameters:
-                        - name: sourceFileName
-                          value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
                   - - name: hashfile
                       template: hashfile-template
                       arguments:
                         parameters:
                         - name: sourceFileName
                           value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
-                        artifacts:
-                        - name: sourceFile
-                          from: "{{steps.movefile.outputs.artifacts.sourceFile}}"
                   - - name: rebuild
                       template: rebuild-template
                       arguments:
@@ -76,9 +67,6 @@ spec:
                           value: "{{steps.readmessage.outputs.parameters.sourceFileName}}"
                         - name: hash
                           value: "{{steps.hashfile.outputs.parameters.hash}}"
-                        artifacts:
-                        - name: sourceFile
-                          from: "{{steps.movefile.outputs.artifacts.sourceFile}}"
                   - - name: consumestatus
                       template: consumestatus-template
                       arguments:
@@ -104,38 +92,19 @@ spec:
                     - name: sourceFileName
                       valueFrom:
                         path: /tmp/sourceFileName.txt
-
-                - name: movefile-template
-                  inputs:
-                    parameters:
-                    - name: sourceFileName
-                  script:
-                    image: python:alpine3.6
-                    command: [python]
-                    source: |
-                      s = "{{inputs.parameters.sourceFileName}}"
-                      result = "ok-to-rebuild" if s.endswith('.jpg') else "nok-to-rebuild" # This output can be used as condition for the next step
-                      print(result)
-                    volumeMounts:
-                    - name: sourcedir
-                      mountPath: /glasswallsource
-                  outputs:
-                    artifacts:
-                    - name: sourceFile
-                      path: /glasswallsource/{{inputs.parameters.sourceFileName}}
                     
                 - name: hashfile-template
                   inputs:
                     parameters:
                     - name: sourceFileName
-                    artifacts:
-                    - name: sourceFile
-                      path: /input/{{inputs.parameters.sourceFileName}}
                   container:
                     image: diggers/file-hasher
                     env:
                     - name: FILEPATH
                       value: "/input/{{inputs.parameters.sourceFileName}}"
+                    volumeMounts:
+                    - name: sourcedir
+                      mountPath: /input
                   outputs:
                     parameters:
                     - name: hash
@@ -147,9 +116,6 @@ spec:
                     parameters:
                     - name: sourceFileName
                     - name: hash
-                    artifacts:
-                    - name: sourceFile
-                      path: /input/{{inputs.parameters.sourceFileName}}
                   container:
                     image: diggers/icap-rebuild
                     env:
@@ -158,6 +124,8 @@ spec:
                     - name: OUTPUT_PATH
                       value: "/output/{{inputs.parameters.hash}}"
                     volumeMounts:
+                    - name: sourcedir
+                      mountPath: /input
                     - name: targetdir
                       mountPath: /output
                   outputs:
